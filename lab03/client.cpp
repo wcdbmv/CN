@@ -1,94 +1,114 @@
 #include <cstdio>
 #include <cstdlib>
+#include <cerrno>
 #include <unistd.h>
-#include <string.h>
+#include <cstring>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <string>
-#include "const.h"
+#include <iostream>
+#include <sstream>
+#include "const.hpp"
+#include "utils.hpp"
 
-void get_request(int sockfd, std::string file) {
-	char buff[MSG_LEN + 1];
-	sprintf(buff, "GET /%s HTTP/1.1\nHost: 127.0.0.1:%d\nConnection: close\n",
-		file.c_str(), PORT);
-	printf("Request:\n%s\n", buff);
-	write(sockfd, buff, sizeof(buff));
+static int client_sd;
+
+void get_request(const std::string& uri) {
+	std::ostringstream oss;
+	oss << "GET /" << uri << " HTTP/1.1\n";
+	oss << "Host: 127.0.0.1:" << SERVER_PORT << '\n';
+	oss << "Connection: close\n";
+	const auto request = oss.str();
+
+	std::cout << "[[Request]]\n" << request << '\n';
+	write(client_sd, request.c_str(), request.size());
 }
 
-void get_response(int sockfd) {
+void get_response() {
 	char buff[MSG_LEN + 1];
-	bzero(buff, sizeof(buff));
 	int n = 0;
-	printf("Response From Server:\n");
+	std::cout << "[[Response]]\n";
 	do {
-		n = read(sockfd, buff, sizeof(buff) - 1);
-		printf("%s", buff);
-		bzero(buff, sizeof(buff));
+		bzero(buff, sizeof buff);
+		n = read(client_sd, buff, sizeof buff - 1);
+		std::cout << buff;
 		fflush(stdout);
-	} while (n == sizeof(buff) - 1);
-	printf("\n");
+	} while (n == sizeof buff - 1);
+	std::cout << std::endl;
+}
+
+int shutdown(const char* str) {
+	close(client_sd);
+	perror(str);
+	return EXIT_FAILURE;
 }
 
 int main(int argc, char** argv) {
-	int client_port = 8989;
-	std::string file = "index.html";
+	constexpr int DEFAULT_CLIENT_PORT = 8100;
+	constexpr const char* DEFAULT_URI = "index.html";
+
+	if (argc > 3) {
+		fprintf(stderr, "Usage: %s [port = %d] [uri = %s]\n", argv[0], DEFAULT_CLIENT_PORT, DEFAULT_URI);
+		return EXIT_FAILURE;
+	}
+
+	int client_port = DEFAULT_CLIENT_PORT;
+	std::string uri = DEFAULT_URI;
+
 	if (argc > 1) {
-		client_port = atoi(argv[1]);
-		if (client_port < 1024 || client_port > 65535 || client_port == PORT) {
-			return -1;
+		errno = 0;
+		char* endptr = argv[1];
+		client_port = strtol(argv[1], &endptr, 10);
+		if (*endptr || errno) {
+			perror("strtol");
+			return EXIT_FAILURE;
 		}
+
+		constexpr int MIN_PORT = 1024;
+		constexpr int MAX_PORT = 65535;
+		if (client_port < MIN_PORT || client_port > MAX_PORT || client_port == SERVER_PORT) {
+			fprintf(stderr, "argv[1]: invalid port\n");
+			return EXIT_FAILURE;
+		}
+
 		if (argc == 3) {
-			file = argv[2];
+			uri = argv[2];
 		}
 	}
 
-	int sockfd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (sockfd < 0) {
-		printf("Error [socket()]\n");
-		return SOCKET_ERR;
+	if ((client_sd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+		perror("socket");
+		return EXIT_FAILURE;
 	}
 
-	SA_IN client;
-	memset(&client, 0, sizeof(client));
+	const sockaddr_in client_addr = {
+		.sin_family = AF_INET,
+		.sin_port = htons(client_port),
+		.sin_addr = {.s_addr = INADDR_ANY},
+	};
 
-	client.sin_family = AF_INET;
-	client.sin_addr.s_addr = INADDR_ANY;
-	client.sin_port = htons(client_port);
-
-	int number = 1;
-	setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &number, sizeof(int));
-
-	struct linger sl;
-	sl.l_onoff = 1;
-	sl.l_linger = 0;
-	setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &sl, sizeof(sl));
-
-	int ret = bind(sockfd, (const SA*)&client, sizeof(client));
-	if (ret < 0) {
-		close(sockfd);
-		printf("\nError [bind()]\n");
-		return BIND_ERR;
+	if (reuse(client_sd) == -1) {
+		return shutdown("setsockopt");
 	}
 
-	struct sockaddr_in server;
-	memset(&server, 0, sizeof(server));
-
-	server.sin_family = AF_INET;
-	server.sin_port = htons(PORT);
-	server.sin_addr.s_addr = inet_addr("127.0.0.1");
-
-	if (connect(sockfd, (const struct sockaddr*)&server, sizeof(server)) != 0) {
-		close(sockfd);
-		perror("\nError [connect()]");
-		return CONNECT_ERR;
+	if (bind(client_sd, reinterpret_cast<const sockaddr*>(&client_addr), sizeof client_addr) == -1) {
+		return shutdown("bind");
 	}
 
-	get_request(sockfd, file);
-	get_response(sockfd);
+	const sockaddr_in server_addr = {
+		.sin_family = AF_INET,
+		.sin_port = htons(SERVER_PORT),
+		.sin_addr = {.s_addr = inet_addr("127.0.0.1")},
+	};
 
-	close(sockfd);
+	if (connect(client_sd, reinterpret_cast<const sockaddr*>(&server_addr), sizeof server_addr) == -1) {
+		return shutdown("connect");
+	}
 
-	return 0;
+	get_request(uri);
+	get_response();
+
+	close(client_sd);
 }
