@@ -1,30 +1,38 @@
-#include <unistd.h>
-#include <sys/socket.h>
+#include "http_server.hpp"
+
 #include <arpa/inet.h>
-#include <netinet/in.h>
-#include <csignal>
 #include <pthread.h>
-#include <queue>
-#include <string>
-#include <cstring>
-#include <sys/ioctl.h>
-#include <iostream>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include <fstream>
-#include <chrono>
-#include <ctime>
+#include <iostream>
+#include <queue>
 #include <sstream>
+#include <string>
 #include <unordered_map>
-#include <tuple>
+
 #include "const.hpp"
+#include "statistics.hpp"
 #include "utils.hpp"
 
-constexpr int THREAD_POOL_SIZE = 20;
-constexpr int LISTEN_COUNT = 100;
+int server_sd;
 
-static int server_sd;
-static volatile sig_atomic_t stop;
-
+static sig_atomic_t stop;
 static pthread_t thread_pool[THREAD_POOL_SIZE];
+
+void create_threads() {
+	for (auto& thread : thread_pool) {
+		pthread_create(&thread, nullptr, thread_function, nullptr);
+	}
+}
+
+void cancel_threads() {
+	stop = true;
+	for (auto& thread : thread_pool) {
+		pthread_cancel(thread);
+	}
+}
 
 class Client {
 public:
@@ -37,14 +45,18 @@ public:
 	const int socket;
 };
 
-static const std::unordered_map<int, std::string> statuses{
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+static std::queue<Client> queue;
+
+static const std::unordered_map<int, std::string> statuses = {
 	{200, "OK"},
 	{403, "Forbidden"},
 	{404, "Not Found"},
 	{405, "Method Not Allowed"},
 };
 
-static const std::unordered_map<std::string, std::string> content_types{
+static const std::unordered_map<std::string, std::string> content_types = {
 	{".html", "text/html"},
 	{".css", "text/css"},
 	{".js", "application/javascript"},
@@ -54,75 +66,27 @@ static const std::unordered_map<std::string, std::string> content_types{
 	{".gif", "image/gif"},
 };
 
-std::queue<Client> queue;
-
-pthread_mutex_t content_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t condvar = PTHREAD_COND_INITIALIZER;
-std::unordered_map<std::string, std::unordered_map<std::string, int>> content_map;
-
-void write_statistics(const std::string& ip, const std::string& ext) {
-	pthread_mutex_lock(&content_mutex);
-	++content_map[ip][ext];
-	pthread_mutex_unlock(&content_mutex);
-}
-
-void save_statistics() {
-	auto now = std::chrono::system_clock::now();
-	std::time_t end_time = std::chrono::system_clock::to_time_t(now);
-
-	std::string file = "statistics/";
-	file += std::ctime(&end_time);
-	file += ".txt";
-
-	std::ofstream fout(file);
-	for (const auto& ip : content_map) {
-		fout << ip.first << " {\n";
-		for (const auto& fmt : ip.second) {
-			fout << "\t" << fmt.first << ": " << fmt.second << ",\n";
-		}
-		fout << "}\n";
-	}
-	fout.close();
-}
-
-void cancel_threads() {
-	stop = true;
-	for (auto& thread : thread_pool) {
-		pthread_cancel(thread);
-	}
-}
-
-void sighandler(__attribute__((unused)) int signum) {
-	cancel_threads();
-	close(server_sd);
-	printf("[[Stop by %d]]\n", signum);
-	exit(EXIT_SUCCESS);
-}
-
-std::unordered_map<std::string, std::string> get_headers(const std::string& header_text) {
+static std::unordered_map<std::string, std::string> get_headers(const std::string& header) {
 	std::unordered_map<std::string, std::string> headers;
-	std::istringstream header_list{ header_text };
-	std::string line;
-	while (std::getline(header_list, line) && line != "\n") {
-		auto name_end = line.find(':');
+	std::istringstream iss{header};
+	for (std::string line; std::getline(iss, line) && line != "\n";) {
+		auto key_end = line.find(':');
 
-		auto name = line.substr(0, name_end);
-		auto value = line.substr(name_end + 2, line.length() - name_end - 1);
+		auto key = line.substr(0, key_end);
+		auto value = line.substr(key_end + 2, line.length() - key_end - 1);
 
-		headers[name] = value;
+		headers[key] = value;
 	}
 	return headers;
 }
 
-std::string get_start_response_line(
-		const std::string& protocol, int status_code, const std::string& status_string) {
+static std::string get_start_response_line(
+	const std::string& protocol, int status_code, const std::string& status_string) {
 	return protocol + " " + std::to_string(status_code) + " " + status_string;
 }
 
-std::string response_format(
-		const std::string& protocol, int status_code, const std::string& status_string,
-		std::unordered_map<std::string, std::string> headers, std::string body) {
+static std::string response_format(
+	const std::string& protocol, int status_code, std::unordered_map<std::string, std::string> headers, std::string body) {
 	std::string response;
 	auto start_response = get_start_response_line(
 		protocol, status_code, statuses.at(status_code));
@@ -156,7 +120,7 @@ std::string response_format(
 	return response;
 }
 
-std::tuple<std::string, std::string, std::string>
+static std::tuple<std::string, std::string, std::string>
 split_start_request_line(const std::string& line) {
 	auto method_end = line.find(' ');
 	auto path_end = line.find(' ', method_end + 1);
@@ -174,7 +138,7 @@ split_start_request_line(const std::string& line) {
 	return { method, path, protocol };
 }
 
-std::string get_content_type(const std::string& ext) {
+static std::string get_content_type(const std::string& ext) {
 	std::string content_type;
 	if (content_types.find(ext) == content_types.end()) {
 		content_type = "text/plain";
@@ -185,7 +149,7 @@ std::string get_content_type(const std::string& ext) {
 	return content_type;
 }
 
-int check_host(std::unordered_map<std::string, std::string> headers) {
+static int check_host(std::unordered_map<std::string, std::string> headers) {
 	int status = 200;
 	if (headers.find("Host") == headers.end()) {
 		status = 404;
@@ -203,13 +167,13 @@ int check_host(std::unordered_map<std::string, std::string> headers) {
 	return status;
 }
 
-std::string get_extension(const std::string& path) {
+static std::string get_extension(const std::string& path) {
 	auto dot_pos = path.find('.');
 	auto ext = path.substr(dot_pos, path.length() - dot_pos);
 	return ext;
 }
 
-std::string get_response(const Client& client, const std::string& request) {
+static std::string get_response(const Client& client, const std::string& request) {
 	std::string response;
 	int status = 200;
 	std::string status_string = "OK";
@@ -227,7 +191,7 @@ std::string get_response(const Client& client, const std::string& request) {
 	status = check_host(headers);
 	if (status != 200) {
 		response = response_format(
-			"HTTP/1.1", status, statuses.at(status),
+			"HTTP/1.1", status,
 			response_headers, body
 		);
 		return response;
@@ -237,7 +201,7 @@ std::string get_response(const Client& client, const std::string& request) {
 	if (method != "GET" || protocol != "HTTP/1.1") {
 		status = 405;
 		response = response_format(
-			protocol, status, statuses.at(status),
+			protocol, status,
 			response_headers, body
 		);
 		return response;
@@ -247,7 +211,7 @@ std::string get_response(const Client& client, const std::string& request) {
 	if (!infile.good()) {
 		status = 404;
 		response = response_format(
-			protocol, status, statuses.at(status),
+			protocol, status,
 			response_headers, body
 		);
 		return response;
@@ -257,26 +221,24 @@ std::string get_response(const Client& client, const std::string& request) {
 		std::istreambuf_iterator<char>()
 	};
 	infile.close();
+	write_statistics();
 
-	auto ext = get_extension(path);
-	write_statistics(client.ip, ext);
-
-	response_headers["Content-Type"] = get_content_type(ext);
-	int idx = response_headers["Content-Type"].find("image");
+	response_headers["Content-Type"] = get_content_type(get_extension(path));
+	auto idx = response_headers["Content-Type"].find("image");
 	if (idx != std::string::npos) {
 		body = string_to_hex(body);
 	}
 	response_headers["Content-Length"] = std::to_string(body.length());
 
 	response = response_format(
-		protocol, status, statuses.at(status),
+		protocol, status,
 		response_headers, body
 	);
 
 	return response;
 }
 
-void handle_function(const Client& client) {
+static void handle_function(const Client& client) {
 	char buff[MSG_LEN + 1];
 	bzero(buff, sizeof buff);
 	read(client.socket, buff, sizeof buff);
@@ -287,13 +249,13 @@ void handle_function(const Client& client) {
 	write(client.socket, response.c_str(), response.size());
 }
 
-void* thread_function(void* argv) {
+void* thread_function(__attribute__((unused)) void* argv) {
 	while (!stop) {
 		Client* pclient = nullptr;
 
 		pthread_mutex_lock(&mutex);
 		if (queue.empty()) {
-			pthread_cond_wait(&condvar, &mutex);
+			pthread_cond_wait(&cond, &mutex);
 			pclient = &queue.front();
 			queue.pop();
 		}
@@ -306,60 +268,25 @@ void* thread_function(void* argv) {
 	return nullptr;
 }
 
-int shutdown(const char* str) {
-	cancel_threads();
-	close(server_sd);
-	perror(str);
-	return EXIT_FAILURE;
+void new_client(const sockaddr_in& client_addr, int conn_fd) {
+	pthread_mutex_lock(&mutex);
+	queue.emplace(client_addr, conn_fd);
+	pthread_cond_signal(&cond);
+	pthread_mutex_unlock(&mutex);
 }
 
-int main() {
-	for (auto& thread : thread_pool) {
-		pthread_create(&thread, nullptr, thread_function, nullptr);
-	}
+void sighandler(int signum) {
+	cancel_threads();
+	close(server_sd);
+	save_statistics();
+	printf("[[Stop by %d]]\n", signum);
+	exit(EXIT_SUCCESS);
+}
 
-	if ((server_sd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-		cancel_threads();
-		perror("socket");
-		return EXIT_FAILURE;
-	}
-
-	const sockaddr_in server_addr = {
-		.sin_family = AF_INET,
-		.sin_port = htons(SERVER_PORT),
-		.sin_addr = {.s_addr = INADDR_ANY},
-	};
-
-	if (reuse(server_sd) == -1) {
-		return shutdown("setsockopt");
-	}
-
-	if (bind(server_sd, reinterpret_cast<const sockaddr*>(&server_addr), sizeof server_addr) == -1) {
-		return shutdown("bind");
-	}
-
-	if (listen(server_sd, LISTEN_COUNT) == -1) {
-		return shutdown("listen");
-	}
-
-	if (signal(SIGINT, sighandler) == SIG_ERR) {
-		return shutdown("signal");
-	}
-
-	printf("server is running on %s:%d\n", inet_ntoa(server_addr.sin_addr), ntohs(server_addr.sin_port));
-	for (;;) {
-		sockaddr_in client_addr{};
-		socklen_t client_size = sizeof client_addr;
-		const int conn_fd = accept(server_sd, reinterpret_cast<sockaddr*>(&client_addr), &client_size);
-		if (conn_fd == -1) {
-			return shutdown("accept");
-		}
-
-		Client new_client(client_addr, conn_fd);
-
-		pthread_mutex_lock(&mutex);
-		queue.push(new_client);
-		pthread_cond_signal(&condvar);
-		pthread_mutex_unlock(&mutex);
-	}
+int shutdown_server(const char* str) {
+	cancel_threads();
+	close(server_sd);
+	save_statistics();
+	perror(str);
+	return EXIT_FAILURE;
 }

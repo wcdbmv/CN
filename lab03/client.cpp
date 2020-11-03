@@ -1,15 +1,17 @@
-#include <cstdio>
-#include <cstdlib>
-#include <cerrno>
-#include <unistd.h>
-#include <cstring>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <string>
 #include <iostream>
 #include <sstream>
+
+#include <arpa/inet.h>
+#include <cerrno>
+#include <cstdio>
+#include <cstdlib>
+#include <netinet/in.h>
+#include <cstring>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include "const.hpp"
 #include "utils.hpp"
 
@@ -39,7 +41,7 @@ void get_response() {
 	std::cout << std::endl;
 }
 
-int shutdown(const char* str) {
+int shutdown_client(const char* str) {
 	close(client_sd);
 	perror(str);
 	return EXIT_FAILURE;
@@ -90,11 +92,11 @@ int main(int argc, char** argv) {
 	};
 
 	if (reuse(client_sd) == -1) {
-		return shutdown("setsockopt");
+		return shutdown_client("setsockopt");
 	}
 
 	if (bind(client_sd, reinterpret_cast<const sockaddr*>(&client_addr), sizeof client_addr) == -1) {
-		return shutdown("bind");
+		return shutdown_client("bind");
 	}
 
 	const sockaddr_in server_addr = {
@@ -104,7 +106,7 @@ int main(int argc, char** argv) {
 	};
 
 	if (connect(client_sd, reinterpret_cast<const sockaddr*>(&server_addr), sizeof server_addr) == -1) {
-		return shutdown("connect");
+		return shutdown_client("connect");
 	}
 
 	get_request(uri);
