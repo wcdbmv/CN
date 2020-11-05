@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <array>
 #include <fstream>
 #include <iostream>
 #include <queue>
@@ -49,13 +50,6 @@ static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 static std::queue<Client> queue;
 
-static const std::unordered_map<int, std::string> statuses = {
-	{200, "OK"},
-	{403, "Forbidden"},
-	{404, "Not Found"},
-	{405, "Method Not Allowed"},
-};
-
 static const std::unordered_map<std::string, std::string> content_types = {
 	{".html", "text/html"},
 	{".css", "text/css"},
@@ -80,21 +74,28 @@ static std::unordered_map<std::string, std::string> get_headers(const std::strin
 	return headers;
 }
 
-static std::string get_start_response_line(
-	const std::string& protocol, int status_code, const std::string& status_string) {
-	return protocol + " " + std::to_string(status_code) + " " + status_string;
+static std::string get_start_response_line(const std::string& protocol, int status_code) {
+	const std::unordered_map<int, std::string> statuses = {
+		{200, "OK"},
+		{403, "Forbidden"},
+		{404, "Not Found"},
+		{405, "Method Not Allowed"},
+	};
+
+	return protocol + " " + std::to_string(status_code) + " " + statuses.at(status_code);
 }
 
 static std::string response_format(
-	const std::string& protocol, int status_code, std::unordered_map<std::string, std::string> headers, std::string body) {
-	std::string response;
-	auto start_response = get_start_response_line(
-		protocol, status_code, statuses.at(status_code));
-	response += start_response + "\n";
+	const std::string& protocol,
+	int status_code,
+	std::unordered_map<std::string, std::string> headers,
+	std::string body
+) {
+	std::string response = get_start_response_line(protocol, status_code) + "\n";
+	std::cout << response;
 
 	if (status_code != 200) {
-		auto response_file = "public/errors/" + std::to_string(status_code) + ".html";
-		std::ifstream infile{ response_file };
+		std::ifstream infile{"public/errors/" + std::to_string(status_code) + ".html"};
 		body = std::string{
 			std::istreambuf_iterator<char>(infile),
 			std::istreambuf_iterator<char>()
@@ -104,24 +105,17 @@ static std::string response_format(
 		headers["Content-Length"] = std::to_string(body.length());
 	}
 
-	std::string v[3] = {
-		"Content-Type",
-		"Content-Length",
-		"Connection",
-	};
-	for (const auto& header : v) {
+	for (const auto& header : std::array<std::string, 3>{"Content-Type", "Content-Length", "Connection"}) {
 		if (headers.find(header) != headers.end()) {
 			response += header + ": " + headers.at(header) + "\n";
 		}
 	}
 
 	response += "\n" + body;
-	printf("%s\n", start_response.c_str());
 	return response;
 }
 
-static std::tuple<std::string, std::string, std::string>
-split_start_request_line(const std::string& line) {
+static std::tuple<std::string, std::string, std::string> split_start_request_line(const std::string& line) {
 	auto method_end = line.find(' ');
 	auto path_end = line.find(' ', method_end + 1);
 
