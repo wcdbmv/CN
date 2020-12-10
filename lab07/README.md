@@ -167,7 +167,7 @@ Router4
 Router>en
 Router#conf t
 Router(config)#interface GigabitEthernet0/0/0
-Router(config-if)#ip address 192.168.6.94 255.255.255.252
+Router(config-if)#ip address 192.168.6.94 255.255.255.224
 Router(config-if)#ipv6 enable
 Router(config-if)#ipv6 address 2001:9::1/64
 Router(config-if)#no sh
