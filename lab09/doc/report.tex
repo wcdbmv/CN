@@ -19,20 +19,20 @@
 
 \section{Настройка}
 
-На хостах были настроены адреса интерфейсов.
+На хостах были настроены адреса интерфейсов и шлюзы по умолчанию.
 
 \begin{table}[H]
 	\centering
-	\begin{tabular}{|c|c|c|}
+	\begin{tabular}{|c|c|c|c|}
 		\hline
-		\textbf{Хост} & \textbf{Адрес} & \textbf{Маска} \\ \hline
-		Server0       & 192.168.6.1    & 255.255.255.0  \\ \hline
-		Server1       & 192.168.6.2    & 255.255.255.0  \\ \hline
-		PC0           & 192.168.8.1    & 255.255.255.0  \\ \hline
-		PC1           & 192.168.8.2    & 255.255.255.0  \\ \hline
-		PC2           & 192.168.8.3    & 255.255.255.0  \\ \hline
-		PC3           & 192.168.7.1    & 255.255.255.0  \\ \hline
-		PC4           & 192.168.7.2    & 255.255.255.0  \\ \hline
+		\textbf{Хост} & \textbf{Адрес} & \textbf{Маска} & \textbf{Шлюз} \\ \hline
+		Server0       & 192.168.6.1    & 255.255.255.0  & 192.168.6.254 \\ \hline
+		Server1       & 192.168.6.2    & 255.255.255.0  & 192.168.6.254 \\ \hline
+		PC0           & 192.168.8.1    & 255.255.255.0  & 192.168.8.254 \\ \hline
+		PC1           & 192.168.8.2    & 255.255.255.0  & 192.168.8.254 \\ \hline
+		PC2           & 192.168.8.3    & 255.255.255.0  & 192.168.8.254 \\ \hline
+		PC3           & 192.168.7.1    & 255.255.255.0  & 192.168.7.254 \\ \hline
+		PC4           & 192.168.7.2    & 255.255.255.0  & 192.168.7.254 \\ \hline
 	\end{tabular}
 \end{table}
 
@@ -49,12 +49,12 @@
 	VLAN Name                             Status    Ports
 	---- -------------------------------- --------- -------------------------------
 	1    default                          active    Fa0/1, Fa0/2, Fa0/3, Fa0/4
-	Fa0/5, Fa0/6, Fa0/7, Fa0/8
-	Fa0/9, Fa0/10, Fa0/11, Fa0/12
-	Fa0/13, Fa0/14, Fa0/15, Fa0/16
-	Fa0/17, Fa0/18, Fa0/19, Fa0/20
-	Fa0/21, Fa0/22, Fa0/23, Fa0/24
-	Gig0/1, Gig0/2
+	                                                Fa0/5, Fa0/6, Fa0/7, Fa0/8
+	                                                Fa0/9, Fa0/10, Fa0/11, Fa0/12
+	                                                Fa0/13, Fa0/14, Fa0/15, Fa0/16
+	                                                Fa0/17, Fa0/18, Fa0/19, Fa0/20
+	                                                Fa0/21, Fa0/22, Fa0/23, Fa0/24
+	                                                Gig0/1, Gig0/2
 	1002 fddi-default                     active
 	1003 token-ring-default               active
 	1004 fddinet-default                  active
@@ -77,31 +77,37 @@
 	Primary Secondary Type              Ports
 	------- --------- ----------------- ------------------------------------------
 	Switch#conf t
-	Switch(config)#in v 10
+
+	Switch(config)#in g0/1
+	Switch(config-if)#sw m t
+
+	Switch(config-if)#in v 10
 	Switch(config-if)#interface range f0/1-f0/2
 	Switch(config-if-range)#sw m a
 	Switch(config-if-range)#sw a v 10
-	Switch(config-if-range)#ex
-	Switch(config)#in v 20
+
+	Switch(config-if-range)#in v 20
 	Switch(config-if)#interface range f0/3-f0/4
 	Switch(config-if-range)#sw m a
 	Switch(config-if-range)#sw a v 20
-	Switch(config-if-range)#ex
-	Switch(config)#in v 30
+
+	Switch(config-if-range)#in v 30
 	Switch(config-if)#interface range f0/5-f0/7
 	Switch(config-if-range)#sw m a
 	Switch(config-if-range)#sw a v 30
+
 	Switch(config-if-range)#ex
 	Switch(config)#ex
+
 	Switch#sh vl
 
 	VLAN Name                             Status    Ports
 	---- -------------------------------- --------- -------------------------------
 	1    default                          active    Fa0/8, Fa0/9, Fa0/10, Fa0/11
-	Fa0/12, Fa0/13, Fa0/14, Fa0/15
-	Fa0/16, Fa0/17, Fa0/18, Fa0/19
-	Fa0/20, Fa0/21, Fa0/22, Fa0/23
-	Fa0/24, Gig0/1, Gig0/2
+	                                                Fa0/12, Fa0/13, Fa0/14, Fa0/15
+	                                                Fa0/16, Fa0/17, Fa0/18, Fa0/19
+	                                                Fa0/20, Fa0/21, Fa0/22, Fa0/23
+	                                                Fa0/24, Gig0/1, Gig0/2
 	10   VLAN0010                         active    Fa0/1, Fa0/2
 	20   VLAN0020                         active    Fa0/3, Fa0/4
 	30   VLAN0030                         active    Fa0/5, Fa0/6, Fa0/7
@@ -141,21 +147,34 @@
 \begin{lstlisting}[gobble=8, caption=Настройка маршрутизатора Router0]
 	Router>en
 	Router#conf t
-	Router(config)#in g0/0/0.1
-	Router(config-subif)#en d 10
-	Router(config-subif)#ex
-	Router(config)#in g0/0/0.2
-	Router(config-subif)#en d 20
-	Router(config-subif)#ex
-	Router(config)#in g0/0/0.3
-	Router(config-subif)#en d 30
-	Router(config-subif)#ex
+
 	Router(config)#in g0/0/0
+	Router(config-if)#ip ad 192.168.1.1 255.255.255.0
 	Router(config-if)#no sh
-	Router(config-if)#ex
+
+	Router(config-if)#in g0/0/0.1
+	Router(config-subif)#ip ad 192.168.8.254 255.255.255.0
+	Router(config-subif)#en d 10
+
+	Router(config-subif)#in g0/0/0.2
+	Router(config-subif)#ip ad 192.168.7.254 255.255.255.0
+	Router(config-subif)#en d 20
+
+	Router(config-subif)#in g0/0/0.3
+	Router(config-subif)#ip ad 192.168.8.254 255.255.255.0
+	Router(config-subif)#en d 30
+
+	Router(config-subif)#ex
 	Router(config)#ex
 	Router#ex
 \end{lstlisting}
+
+\begin{figure}[H]
+	\centering
+	\includegraphics[width=0.495\linewidth]{inc/img/ping-pc0-pc3.png}
+	\includegraphics[width=0.495\linewidth]{inc/img/ping-pc4-server1.png}
+	\caption{Пинг PC0$\to$PC3 и PC4$\to$Server1}
+\end{figure}
 
 \chapter{Задание 4}
 

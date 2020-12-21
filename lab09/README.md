@@ -82,22 +82,28 @@ Remote SPAN VLANs
 Primary Secondary Type              Ports
 ------- --------- ----------------- ------------------------------------------
 Switch#conf t
-Switch(config)#in v 10
+
+Switch(config)#in g0/1
+Switch(config-if)#sw m t
+
+Switch(config-if)#in v 10
 Switch(config-if)#interface range f0/1-f0/2
 Switch(config-if-range)#sw m a
 Switch(config-if-range)#sw a v 10
-Switch(config-if-range)#ex
-Switch(config)#in v 20
+
+Switch(config-if-range)#in v 20
 Switch(config-if)#interface range f0/3-f0/4
 Switch(config-if-range)#sw m a
 Switch(config-if-range)#sw a v 20
-Switch(config-if-range)#ex
-Switch(config)#in v 30
+
+Switch(config-if-range)#in v 30
 Switch(config-if)#interface range f0/5-f0/7
 Switch(config-if-range)#sw m a
 Switch(config-if-range)#sw a v 30
+
 Switch(config-if-range)#ex
 Switch(config)#ex
+
 Switch#sh vl
 
 VLAN Name                             Status    Ports
@@ -143,18 +149,24 @@ Router0
 ```
 Router>en
 Router#conf t
-Router(config)#in g0/0/0.1
-Router(config-subif)#en d 10
-Router(config-subif)#ex
-Router(config)#in g0/0/0.2
-Router(config-subif)#en d 20
-Router(config-subif)#ex
-Router(config)#in g0/0/0.3
-Router(config-subif)#en d 30
-Router(config-subif)#ex
+
 Router(config)#in g0/0/0
+Router(config-if)#ip ad 192.168.1.1 255.255.255.0
 Router(config-if)#no sh
-Router(config-if)#ex
+
+Router(config-if)#in g0/0/0.1
+Router(config-subif)#ip ad 192.168.8.254 255.255.255.0
+Router(config-subif)#en d 10
+
+Router(config-subif)#in g0/0/0.2
+Router(config-subif)#ip ad 192.168.7.254 255.255.255.0
+Router(config-subif)#en d 20
+
+Router(config-subif)#in g0/0/0.3
+Router(config-subif)#ip ad 192.168.8.254 255.255.255.0
+Router(config-subif)#en d 30
+
+Router(config-subif)#ex
 Router(config)#ex
 Router#ex
 ```
